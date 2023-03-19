@@ -1,17 +1,19 @@
 package com.retina_uav.tracker_poi_ar
 
-import android.Manifest
 import android.os.Bundle
 import android.os.CountDownTimer
+import android.service.controls.ControlsProviderService.TAG
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.view.isGone
 import androidx.core.view.isVisible
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.ar.core.Anchor
+import com.google.ar.core.Earth
+import com.google.ar.core.GeospatialPose
 import com.google.ar.core.TrackingState
 import io.github.sceneview.ar.ArSceneView
 import io.github.sceneview.ar.arcore.createAnchor
@@ -32,12 +34,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private lateinit var loadingView: View
     private lateinit var statusText: TextView
     private lateinit var placeModelButton: ExtendedFloatingActionButton
-    private lateinit var newModelButton: ExtendedFloatingActionButton
+    private lateinit var timerButton: ExtendedFloatingActionButton
 
-    private lateinit var myText: TextView
-    lateinit var arText: TextView
-    lateinit var testViewButton: ExtendedFloatingActionButton
+    private lateinit var geospatialPoseText: TextView
+    private lateinit var arText: TextView
     private lateinit var viewNode: ViewNode
+
+    private var earth: Earth? = null
+    private var modelNode: ArModelNode? = null
 
     data class Model(
         val fileLocation: String,
@@ -46,51 +50,23 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val applyPoseRotation: Boolean = true
     )
 
-    private val models = listOf(
-        Model(
-            fileLocation = "https://storage.googleapis.com/ar-answers-in-search-models/static/Tiger/model.glb",
-            // Display the Tiger with a size of 3 m long
-            scaleUnits = 2.5f,
-            placementMode = PlacementMode.BEST_AVAILABLE,
-            applyPoseRotation = false
-        ),
-        Model(
-            fileLocation = "https://sceneview.github.io/assets/models/DamagedHelmet.glb",
-            placementMode = PlacementMode.INSTANT,
-            scaleUnits = 0.5f
-        ),
-        Model(
-            fileLocation = "https://storage.googleapis.com/ar-answers-in-search-models/static/GiantPanda/model.glb",
-            placementMode = PlacementMode.PLANE_HORIZONTAL,
-            // Display the Tiger with a size of 1.5 m height
-            scaleUnits = 0.5f
-        ),
-        Model(
-            fileLocation = "https://sceneview.github.io/assets/models/Spoons.glb",
-            placementMode = PlacementMode.PLANE_HORIZONTAL_AND_VERTICAL,
-            // Keep original model size
-            scaleUnits = 0.5f
-        ),
-        Model(
-            fileLocation = "https://sceneview.github.io/assets/models/Halloween.glb",
-            placementMode = PlacementMode.PLANE_HORIZONTAL,
-            scaleUnits = 0.5f
-        ),
+    private val marker_model = Model(
+        fileLocation = "marker.glb",
+        scaleUnits = 1f,
+        placementMode = PlacementMode.BEST_AVAILABLE,
+        applyPoseRotation = false
     )
 
     private val timer = object: CountDownTimer(30000, 1000) {
 
         override fun onTick(millisUntilFinished: Long) {
-            arText.text = "Tiger : " + (millisUntilFinished / 1000)
+            arText.text = "Counter : " + (millisUntilFinished / 1000)
         }
 
         override fun onFinish() {
-            arText.text = "END"
+            arText.text = "End"
         }
     }
-
-    var modelIndex = 0
-    var modelNode: ArModelNode? = null
 
     var isLoading = false
         set(value) {
@@ -98,20 +74,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             loadingView.isGone = !value
         }
 
-    private fun requestLocationPermission() {
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.CAMERA
-            ),
-            1
-        )
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        /*if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_DENIED &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_DENIED)
+            ActivityCompat.requestPermissions(this,
+                arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.CAMERA), 1)*/
 
         setFullScreen(
             findViewById(R.id.rootView),
@@ -122,15 +91,17 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
         statusText = findViewById(R.id.statusText)
         sceneView = findViewById<ArSceneView?>(R.id.sceneView).apply {
+            geospatialEnabled = true
             onArTrackingFailureChanged = { reason ->
                 statusText.text = reason?.getDescription(context)
                 statusText.isGone = reason == null
             }
-            geospatialEnabled = true
+            planeRenderer.isShadowReceiver = false
         }
 
         loadingView = findViewById(R.id.loadingView)
-        newModelButton = findViewById<ExtendedFloatingActionButton>(R.id.newModelButton).apply {
+
+        timerButton = findViewById<ExtendedFloatingActionButton>(R.id.timerButton).apply {
             // Add system bar margins
             val bottomMargin = (layoutParams as ViewGroup.MarginLayoutParams).bottomMargin
             doOnApplyWindowInsets { systemBarsInsets ->
@@ -142,15 +113,25 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         placeModelButton = findViewById<ExtendedFloatingActionButton>(R.id.placeModelButton).apply {
             setOnClickListener { placeModelNode() }
         }
-        testViewButton = findViewById<ExtendedFloatingActionButton>(R.id.testView).apply {
-            setOnClickListener { functionTestView() }
-        }
 
         newModelNode()
 
-        myText = findViewById(R.id.myText)
+        geospatialPoseText = findViewById(R.id.geospatialPoseText)
+    }
 
-        requestLocationPermission()
+    override fun onStart() {
+        super.onStart()
+
+        sceneView.lifecycle.addObserver(onArFrame = { frame ->
+            earth?.let {
+                if (it.trackingState == TrackingState.TRACKING)
+                    updateGeospatialPoseText(it)
+                else
+                    geospatialPoseText.text = it.earthState.toString() + " - " + it.trackingState.toString()
+            } ?: run {
+                earth = sceneView.arSession?.earth!!
+            }
+        })
     }
 
     fun functionTestView() {
@@ -161,8 +142,44 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         timer.start()
     }
 
+    private fun updateGeospatialPoseText(earth: Earth) {
+        val geospatialPose: GeospatialPose = earth.getCameraGeospatialPose()
+        val quaternion = geospatialPose.eastUpSouthQuaternion
+        val poseText = resources
+            .getString(
+                R.string.geospatial_pose,
+                geospatialPose.latitude,
+                geospatialPose.longitude,
+                geospatialPose.horizontalAccuracy,
+                geospatialPose.altitude,
+                geospatialPose.verticalAccuracy,
+                quaternion[0],
+                quaternion[1],
+                quaternion[2],
+                quaternion[3],
+                geospatialPose.orientationYawAccuracy
+            )
+        runOnUiThread { geospatialPoseText.text = poseText }
+    }
+
     private fun placeModelNode() {
-        modelNode?.anchor()
+        earth?.let {
+            var earthAnchor: Anchor? = null
+            if (it.trackingState == TrackingState.TRACKING) {
+                geospatialPoseText.text = "TRACKING ON !"
+
+                val altitude = it.cameraGeospatialPose.altitude - 1
+
+                val geospatialHitPose = it.getGeospatialPose(modelNode?.hitResult?.hitPose)
+                val latitude = geospatialHitPose.latitude
+                val longitude = geospatialHitPose.longitude
+                val rotation = Rotation(0f, 0f, 0f)
+
+                earthAnchor = it.createAnchor(latitude, longitude, altitude, rotation)
+
+                modelNode?.anchor = earthAnchor
+            }
+        } ?: modelNode?.anchor()
 
         placeModelButton.isVisible = false
         sceneView.planeRenderer.isVisible = false
@@ -174,17 +191,16 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             sceneView.removeChild(it)
             it.destroy()
         }
-        val model = models[modelIndex]
-        modelIndex = (modelIndex + 1) % models.size
-        modelNode = ArModelNode(model.placementMode).apply {
-            applyPoseRotation = model.applyPoseRotation
+
+        modelNode = ArModelNode(marker_model.placementMode).apply {
+            applyPoseRotation = marker_model.applyPoseRotation
             loadModelGlbAsync(
                 context = this@MainActivity,
-                glbFileLocation = model.fileLocation,
+                glbFileLocation = marker_model.fileLocation,
                 autoAnimate = false,
-                //scaleToUnits = model.scaleUnits,
-                scaleToUnits = 0.5f,
+                scaleToUnits = marker_model.scaleUnits,
                 // Place the model origin at the bottom center
+
                 centerOrigin = Position(y = -1.0f)
             ) {
                 sceneView.planeRenderer.isVisible = true
@@ -202,8 +218,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             parent = modelNode
             loadView(this@MainActivity, lifecycle, R.layout.view_text)
             isEditable = true
-            position = Position(0.0f, 1f, 0.0f)
-            scale = Scale(0.7f)
+            position = Position(0.0f, 1.26f, 0.0f)
+            scale = Scale(1f)
         }
 
         sceneView.addChild(modelNode!!)

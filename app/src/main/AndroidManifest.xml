@@ -2,8 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Always needed for AR. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" />
 
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -39,12 +39,11 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-            <!-- ARCore API -->
-            <meta-data
-                android:name="com.google.android.ar.API_KEY"
-                android:value="YOUR_API_KEY_HERE"/>
         </activity>
+
+        <meta-data
+            android:name="com.google.android.ar.API_KEY"
+            android:value="${YOUR_API_KEY}"/>
     </application>
 
 </manifest>

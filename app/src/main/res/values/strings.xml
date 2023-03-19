@@ -6,4 +6,6 @@
     <string name="depth_placement">Depth Placement</string>
     <string name="plane_placement">Plane Placement</string>
     <string name="best_placement">Best Placement</string>
+    <string translatable="false" name="geospatial_pose_not_tracking">GEOSPATIAL POSE: Not tracking</string>
+    <string translatable="false" name="geospatial_pose">LAT/LNG: %.6f˚, %.6f˚\n\t\t\tACCURACY: %.2fm\nALTITUDE: %.2fm\n\t\t\tACCURACY: %.2fm\nORIENTATION: [%.1f, %.1f, %.1f, %.1f]\n\t\t\tYAW ACCURACY: %.1f˚</string>
 </resources>
