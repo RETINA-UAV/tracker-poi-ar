@@ -8,5 +8,6 @@
     android:gravity="center"
     android:orientation="vertical"
     android:padding="6dp"
-    android:text="Tiger"
+    android:text="X"
+    android:textSize="25px"
     android:textAlignment="center" />

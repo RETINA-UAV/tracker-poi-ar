@@ -1,7 +1,6 @@
 package com.retina_uav.tracker_poi_ar
 
 import android.os.Bundle
-import android.os.CountDownTimer
 import android.service.controls.ControlsProviderService.TAG
 import android.util.Log
 import android.view.View
@@ -26,6 +25,7 @@ import io.github.sceneview.math.Scale
 import io.github.sceneview.node.ViewNode
 import io.github.sceneview.utils.doOnApplyWindowInsets
 import io.github.sceneview.utils.setFullScreen
+import kotlin.math.*
 
 
 class MainActivity : AppCompatActivity(R.layout.activity_main) {
@@ -33,8 +33,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private lateinit var sceneView: ArSceneView
     private lateinit var loadingView: View
     private lateinit var statusText: TextView
-    private lateinit var placeModelButton: ExtendedFloatingActionButton
-    private lateinit var timerButton: ExtendedFloatingActionButton
+    private lateinit var startInfoButton: ExtendedFloatingActionButton
+    private lateinit var placePOIButton: ExtendedFloatingActionButton
 
     private lateinit var geospatialPoseText: TextView
     private lateinit var arText: TextView
@@ -43,11 +43,19 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private var earth: Earth? = null
     private var modelNode: ArModelNode? = null
 
+    private var sizeModel: Float = 1.8f
+    private var isStart: Boolean = false
+
     data class Model(
         val fileLocation: String,
         val scaleUnits: Float? = null,
         val placementMode: PlacementMode = PlacementMode.BEST_AVAILABLE,
         val applyPoseRotation: Boolean = true
+    )
+
+    data class PointGPS(
+        val latitude: Double,
+        val longitude: Double
     )
 
     private val marker_model = Model(
@@ -57,16 +65,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         applyPoseRotation = false
     )
 
-    private val timer = object: CountDownTimer(30000, 1000) {
-
-        override fun onTick(millisUntilFinished: Long) {
-            arText.text = "Counter : " + (millisUntilFinished / 1000)
-        }
-
-        override fun onFinish() {
-            arText.text = "End"
-        }
-    }
+    private lateinit var myCurrentPOI: PointGPS
 
     var isLoading = false
         set(value) {
@@ -76,11 +75,6 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        /*if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_DENIED &&
-            ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_DENIED)
-            ActivityCompat.requestPermissions(this,
-                arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.CAMERA), 1)*/
 
         setFullScreen(
             findViewById(R.id.rootView),
@@ -101,17 +95,20 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
         loadingView = findViewById(R.id.loadingView)
 
-        timerButton = findViewById<ExtendedFloatingActionButton>(R.id.timerButton).apply {
+        placePOIButton = findViewById<ExtendedFloatingActionButton>(R.id.placePOIButton).apply {
             // Add system bar margins
             val bottomMargin = (layoutParams as ViewGroup.MarginLayoutParams).bottomMargin
             doOnApplyWindowInsets { systemBarsInsets ->
                 (layoutParams as ViewGroup.MarginLayoutParams).bottomMargin =
                     systemBarsInsets.bottom + bottomMargin
             }
-            setOnClickListener { newModelNode() }
-        }
-        placeModelButton = findViewById<ExtendedFloatingActionButton>(R.id.placeModelButton).apply {
             setOnClickListener { placeModelNode() }
+        }
+        startInfoButton = findViewById<ExtendedFloatingActionButton>(R.id.startInfoButton).apply {
+            setOnClickListener {
+                viewNode.isVisible = true
+                isStart = true
+            }
         }
 
         newModelNode()
@@ -131,19 +128,32 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             } ?: run {
                 earth = sceneView.arSession?.earth!!
             }
+
+            if(isStart) {
+                updateARText()
+            }
         })
     }
 
-    fun functionTestView() {
+    fun updateARText() {
         if (!::arText.isInitialized) {
             arText = viewNode.renderable!!.view as TextView
         }
+        if (::myCurrentPOI.isInitialized) {
+            earth?.let {
+                val lat1 = it.cameraGeospatialPose.latitude
+                val lon1 = it.cameraGeospatialPose.longitude
 
-        timer.start()
+                val lat2 = myCurrentPOI.latitude
+                val lon2 = myCurrentPOI.longitude
+
+                arText.text = "Dist : " + "%.2f".format(distanceGPS(lat1, lon1, lat2, lon2)) + " m"
+            } ?: run {arText.text = "FAILED"}
+        }
     }
 
     private fun updateGeospatialPoseText(earth: Earth) {
-        val geospatialPose: GeospatialPose = earth.getCameraGeospatialPose()
+        val geospatialPose = earth.getCameraGeospatialPose()
         val quaternion = geospatialPose.eastUpSouthQuaternion
         val poseText = resources
             .getString(
@@ -168,20 +178,22 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             if (it.trackingState == TrackingState.TRACKING) {
                 geospatialPoseText.text = "TRACKING ON !"
 
+                val quaternion = Rotation(0f, 0f, 0f)
                 val altitude = it.cameraGeospatialPose.altitude - 1
 
                 val geospatialHitPose = it.getGeospatialPose(modelNode?.hitResult?.hitPose)
                 val latitude = geospatialHitPose.latitude
                 val longitude = geospatialHitPose.longitude
+                myCurrentPOI = PointGPS(latitude, longitude)
+
                 val rotation = Rotation(0f, 0f, 0f)
 
-                earthAnchor = it.createAnchor(latitude, longitude, altitude, rotation)
+                earthAnchor = it.createAnchor(latitude, longitude, altitude, quaternion)
 
                 modelNode?.anchor = earthAnchor
             }
-        } ?: modelNode?.anchor()
+        } ?: run{ modelNode?.anchor() }
 
-        placeModelButton.isVisible = false
         sceneView.planeRenderer.isVisible = false
     }
 
@@ -197,7 +209,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             loadModelGlbAsync(
                 context = this@MainActivity,
                 glbFileLocation = marker_model.fileLocation,
-                autoAnimate = false,
+                autoAnimate = true,
                 scaleToUnits = marker_model.scaleUnits,
                 // Place the model origin at the bottom center
 
@@ -207,10 +219,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 isLoading = false
             }
             onAnchorChanged = { node, _ ->
-                placeModelButton.isGone = node.isAnchored
+                placePOIButton.isGone = node.isAnchored
             }
             onHitResult = { node, _ ->
-                placeModelButton.isGone = !node.isTracking
+                placePOIButton.isGone = !node.isTracking
             }
         }
 
@@ -218,12 +230,24 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             parent = modelNode
             loadView(this@MainActivity, lifecycle, R.layout.view_text)
             isEditable = true
-            position = Position(0.0f, 1.26f, 0.0f)
-            scale = Scale(1f)
+            position = Position(0.0f, sizeModel + 0.1f, 0.0f)
+            scale = Scale(2f)
+            isVisible = false
         }
 
         sceneView.addChild(modelNode!!)
-        // Select the model node by default (the model node is also selected on tap)
         sceneView.selectedNode = modelNode
+    }
+
+    private fun distanceGPS(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val earthRadiusKm = 6371
+        val dLat = Math.toRadians(lat2 - lat1);
+        val dLon = Math.toRadians(lon2 - lon1);
+        val originLat = Math.toRadians(lat1);
+        val destinationLat = Math.toRadians(lat2);
+
+        val a = sin(dLat / 2).pow(2.toDouble()) + sin(dLon / 2).pow(2.toDouble()) * cos(originLat) * cos(destinationLat);
+        val c = 2 * asin(sqrt(a));
+        return earthRadiusKm * c * 1000
     }
 }

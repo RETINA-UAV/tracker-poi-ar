@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">tracker-poi-ar</string>
+    <string name="app_name">Tracker POI AR</string>
     <string name="new_object">New object</string>
     <string name="place_object">Place object</string>
     <string name="instant_placement">Instant Placement</string>
